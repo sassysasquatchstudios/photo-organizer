@@ -3,9 +3,10 @@ import re
 import shutil
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
 
 try:
     import pillow_heif
@@ -77,42 +78,74 @@ def unique_dest(folder, filename):
     return dest
 
 
+SHOOT_GAP_MINUTES = 20
+
+
 def organize(src, dst, on_progress, on_status):
     src, dst = Path(src), Path(dst)
 
-    files = [
+    all_files = [
         p for p in src.rglob("*")
         if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
     ]
-    total     = len(files)
-    organized = 0
-    unsorted  = 0
-    errors    = 0
+    total = len(all_files)
+    on_status(f"Found {total} images, reading dates…")
 
-    on_status(f"Found {total} images…")
+    # Pass 1 — read dates (50% of progress)
+    dated    = defaultdict(list)  # (year, month, day) → [(dt, path), ...]
+    unsorted = []
 
-    for i, filepath in enumerate(files):
+    for i, filepath in enumerate(all_files):
         dt = get_exif_date(filepath)
-
         if dt:
-            dest_dir = dst / str(dt.year) / f"{dt.month:02d}" / f"{dt.day:02d}"
+            dated[(dt.year, dt.month, dt.day)].append((dt, filepath))
         else:
-            dest_dir = dst / "_unsorted"
-            unsorted += 1
+            unsorted.append(filepath)
+        on_progress((i + 1) / total * 50)
 
+    # Build copy task list — sort within each day and group into shoots
+    copy_tasks = []  # [(filepath, dest_dir)]
+
+    for (year, month, day), files in dated.items():
+        files.sort(key=lambda x: x[0])
+        base = dst / str(year) / f"{month:02d}" / f"{day:02d}"
+        shoot_num = 1
+        prev_dt   = None
+
+        for dt, filepath in files:
+            if prev_dt is not None:
+                gap_mins = (dt - prev_dt).total_seconds() / 60
+                if gap_mins > SHOOT_GAP_MINUTES:
+                    shoot_num += 1
+            copy_tasks.append((filepath, base / f"shoot-{shoot_num:02d}"))
+            prev_dt = dt
+
+    for filepath in unsorted:
+        copy_tasks.append((filepath, dst / "_unsorted"))
+
+    # Pass 2 — copy files (remaining 50% of progress)
+    organized     = 0
+    unsorted_count = 0
+    errors        = 0
+    n             = len(copy_tasks)
+
+    for i, (filepath, dest_dir) in enumerate(copy_tasks):
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest_path = unique_dest(dest_dir, filepath.name)
 
         try:
             shutil.copy2(filepath, dest_path)
-            organized += 1
+            if dest_dir.name == "_unsorted":
+                unsorted_count += 1
+            else:
+                organized += 1
         except Exception:
             errors += 1
 
-        on_progress((i + 1) / total * 100)
-        on_status(f"Copying {i + 1} of {total}: {filepath.name}")
+        on_progress(50 + (i + 1) / n * 50)
+        on_status(f"Copying {i + 1} of {n}: {filepath.name}")
 
-    return organized, unsorted, errors
+    return organized, unsorted_count, errors
 
 
 class App(tk.Tk):
