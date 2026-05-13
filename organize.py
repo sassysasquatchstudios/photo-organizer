@@ -24,8 +24,9 @@ IMAGE_EXTENSIONS = {
 
 EXIF_DATETIME_ORIGINAL = 36867
 EXIF_DATETIME          = 306
-XMP_DATE_PATTERN       = re.compile(
+XMP_DATE_PATTERN = re.compile(
     r'(?:DateCreated|CreateDate)[^\d]+([\d]{4}-[\d]{2}-[\d]{2})'
+    r'(?:T([\d]{2}:[\d]{2}:[\d]{2}))?'
 )
 
 
@@ -36,7 +37,11 @@ def get_xmp_date(img):
             xmp_str = xmp.decode("utf-8", errors="ignore")
             match = XMP_DATE_PATTERN.search(xmp_str)
             if match:
-                return datetime.strptime(match.group(1), "%Y-%m-%d")
+                date_str = match.group(1)
+                time_str = match.group(2)
+                fmt = "%Y-%m-%d %H:%M:%S" if time_str else "%Y-%m-%d"
+                combined = f"{date_str} {time_str}" if time_str else date_str
+                return datetime.strptime(combined, fmt)
     except Exception:
         pass
     return None
