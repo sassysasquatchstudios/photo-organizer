@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import threading
 import tkinter as tk
@@ -22,13 +23,41 @@ IMAGE_EXTENSIONS = {
 
 EXIF_DATETIME_ORIGINAL = 36867
 EXIF_DATETIME          = 306
+XMP_DATE_PATTERN       = re.compile(
+    r'(?:DateCreated|CreateDate)[^\d]+([\d]{4}-[\d]{2}-[\d]{2})'
+)
+
+
+def get_xmp_date(img):
+    try:
+        xmp = img.info.get("xmp", b"")
+        if xmp:
+            xmp_str = xmp.decode("utf-8", errors="ignore")
+            match = XMP_DATE_PATTERN.search(xmp_str)
+            if match:
+                return datetime.strptime(match.group(1), "%Y-%m-%d")
+    except Exception:
+        pass
+    return None
 
 
 def get_exif_date(filepath):
     try:
         img  = Image.open(filepath)
         exif = img.getexif()
-        raw  = exif.get(EXIF_DATETIME_ORIGINAL) or exif.get(EXIF_DATETIME)
+
+        # 1. EXIF DateTimeOriginal — camera-written, most accurate
+        raw = exif.get(EXIF_DATETIME_ORIGINAL)
+        if raw:
+            return datetime.strptime(raw, "%Y:%m:%d %H:%M:%S")
+
+        # 2. XMP DateCreated / CreateDate — Lightroom/editor written, what Windows shows
+        xmp_date = get_xmp_date(img)
+        if xmp_date:
+            return xmp_date
+
+        # 3. EXIF DateTime — often the export date, least reliable
+        raw = exif.get(EXIF_DATETIME)
         if raw:
             return datetime.strptime(raw, "%Y:%m:%d %H:%M:%S")
     except Exception:
